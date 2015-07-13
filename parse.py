@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 
 from __future__ import unicode_literals
+from multiprocessing import Process, Queue
 
-import urllib2, logging
-import sqlite3
+import urllib2, logging, sqlite3
 import os
 import sys
 
@@ -195,49 +195,64 @@ class WebWorker():
         
         logging.info('Items at index ' + str(index) + ': ' + str(len(parser.urls)))
         
+        queue = Queue()
+        
         for itemURL in parser.urls:
             if 'categories' in itemURL:
                 logging.debug('Category :' + itemURL + '\n')
-                self.processCategory(itemURL)
+                self.processCategory(itemURL, queue)
                 logging.debug('End of category\n')
             else:
                 self.processItemAtUrl(itemURL, 1)
+#                queue.put(itemURL)
 
-    def processCategory(self, URL):
+#        workers = []
+#    
+#        for i in range(1):
+#            p = Process(target = self.processItemAtUrl, args = (queue.get(), 1))
+#            workers.append(p)
+#            p.start()
+#        
+#        logging.debug('Workers\' size is ' + str(len(workers)))
+#    
+#        while not queue.empty():
+#            for p in workers:
+#                if not p.is_alive():
+#                    p.join()
+#                    p = Process(target = self.processItemAtUrl, args = (queue.get(), 1))
+#                    p.start()
+
+    def processCategory(self, URL, queue):
         
         data = self.catchDataAtUrl(self.ikeaUrl + URL)
         parser = categoryParser()
         parser.feed(data.decode('UTF-8'))
     
         for itemURL in parser.itemURLs:
+#            queue.put(itemURL)
             self.processItemAtUrl(itemURL, 1)
 
     def processItemAtUrl(self, url, recursive):
 
         logging.debug('Parsing an item:' + url)
 
-        if os.fork() == 0:
+        logging.basicConfig(filename = 'parser.log', format = '%(levelname)s:%(message)s', level = logging.INFO)
 
-            logging.basicConfig(filename = 'parser.log', format = '%(levelname)s:%(message)s', level = logging.INFO)
+        parser = itemParser()
+        data = self.catchDataAtUrl(self.ikeaUrl + url)
+        
+        parser.feed(data.decode('UTF-8'))
+        self.database.insertItem(parser.item)
+        
+        global qty
+        qty += 1
+        
+        if qty % 100 == 0:
+            logging.info(str(qty))
 
-            parser = itemParser()
-            data = self.catchDataAtUrl(self.ikeaUrl + url)
-            
-            parser.feed(data.decode('UTF-8'))
-            self.database.insertItem(parser.item)
-            
-            global qty
-            qty += 1
-            
-            if qty % 100 == 0:
-                logging.info(str(qty) + '\n')
-            
-            if recursive == 1 and len(parser.otherItemsSerial):
-                for x in parser.otherItemsSerial:
-                    self.processItemAtUrl(self.productUrl + str(x), 0)
-
-            sys.exit(0)
-
+        if recursive == 1 and len(parser.otherItemsSerial):
+            for x in parser.otherItemsSerial:
+                self.processItemAtUrl(self.productUrl + str(x), 0)
 
 databaseName = 'data.sqlite3'
 
@@ -246,7 +261,7 @@ if __name__ == '__main__':
     signal.signal(signal.SIGINT, signal_handler)
     
     os.system('python init.py')
-    logging.basicConfig(format = '%(levelname)s:%(message)s', level = logging.INFO)
+    logging.basicConfig(format = '%(levelname)s:%(message)s', level = logging.DEBUG)
     
     worker = WebWorker()
 

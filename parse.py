@@ -2,7 +2,7 @@
 
 from __future__ import unicode_literals
 
-import urllib2
+import urllib2, logging
 import sqlite3
 import os
 import sys
@@ -14,48 +14,43 @@ import sys
 
 def signal_handler(signal, frame):
     
-    print('You pressed Ctrl+C!')
+    logging.debug('You pressed Ctrl+C!')
     sys.exit(1)
 
 class Item:
     
     fields = [('name', ''), ('title', ''), ('desc', ''), ('price', ''), ('serial', '')]
 
-
     def printItem(self):
         for x in range (0, len(self.fields)):
-            if x == 1:
-                for c in self.fields[x][1]:
-                    print c
-                    print ' - '
-                    print ord(c)
-                    print '\n'
             print self.fields[x][1]
 
 qty = 0
 
 class productsAzLinkParser(HTMLParser):
 
-    doesSpanHashtagBegin = 0
-    
-    urls = []
+    def __init__(self):
+        HTMLParser.__init__(self)
+        self.urls = []
+        self.doesSpanHashtagBegin = 0
 
     def handle_starttag(self, tag, attrs):
         if tag == 'span' and attrs == [('class', 'productsAzLink')]:
             self.doesSpanHashtagBegin = 1
 
         if tag == 'a' and self.doesSpanHashtagBegin:
-            self.urls.append(attrs.pop(0)[1])
+            self.urls.append(attrs[0][1])
     
     def handle_endtag(self, tag):
-        if self.doesSpanHashtagBegin:
+        if tag == 'span' and self.doesSpanHashtagBegin:
             self.doesSpanHashtagBegin = 0
 
 class categoryParser(HTMLParser):
 
-    itemURLs = []
-
-    attrs = ['a', ('class', 'productLink')]
+    def __init__(self):
+        HTMLParser.__init__(self)
+        self.itemURLs = []
+        self.attrs = ['a', ('class', 'productLink')]
 
     def handle_starttag(self, tag, attrs):
         if tag == self.attrs[0] and len(attrs) >= 2:
@@ -69,7 +64,7 @@ class itemParser(HTMLParser):
     encoding = 'UTF-8'
     
     fetchMask = []
-    attrs = [['div', ('id', 'name')], ['div', ('class', 'prodInfoRow')], ['div', ('id', 'type')], ['span', ('id', 'price1')], ['div', ('id', 'itemNumber')]]
+    attrs = [['div', ('id', 'name')], ['div', ('class', 'proddebugRow')], ['div', ('id', 'type')], ['span', ('id', 'price1')], ['div', ('id', 'itemNumber')]]
     
     otherItemsFetching = 0
     otherItemsAttrs = ['select', [('class', 'dropdown'), ('id', 'dropAllAttributes'), ('name', 'partNumber'),  ('title', 'dropAllAttributes')]]
@@ -77,7 +72,6 @@ class itemParser(HTMLParser):
     
     def __init__(self):
         HTMLParser.__init__(self)
-        
         self.fetchMask = []
         
         for x in range(0, len(self.item.fields)):
@@ -110,7 +104,6 @@ class itemParser(HTMLParser):
                 
                 if self.item.fields[x][0] == 'price':
                     self.item.fields[x] = (self.item.fields[x][0], data.strip()[:-2].replace(unichr(160), ''))
-
                 else:
                     self.item.fields[x] = (self.item.fields[x][0], data.strip().replace('\n', '').replace(chr(9), '').replace(chr(13), ''))
 
@@ -152,22 +145,22 @@ class Database():
         sql += item.fields[3][1];
         sql += ");"
         
-        if __debug__:
-            print sql
-        
         try:
+        
+            logging.debug(sql + '\n')
             self.cursor.execute(sql)
+        
         except sqlite3.Error as e:
 
-            print sql
-            print "An error occurred:", e.args[0]
-            
-            sys.exit(1)
+            logging.warning(sql + ' ' + e.args[0])
 
         try:
+            
             self.connection.commit()
+        
         except:
-            print 'SQLITE COMMIT ISSUE'
+            
+            logging.error('SQLITE COMMIT ISSUE')
 
     def doesNotContainItem(self, serial):
         
@@ -176,115 +169,74 @@ class Database():
 
 
 class WebWorker():
-
-    allItemsAZUrl = 'http://www.ikea.com/ru/ru/catalog/productsaz'
-    ikeaUrl = 'http://www.ikea.com'
-    productUrl = '/ru/ru/catalog/products/'
-    
-    amount = 0
-    database = None
     
     def __init__(self):
         self.database = Database()
+        self.allItemsAZUrl = 'http://www.ikea.com/ru/ru/catalog/productsaz'
+        self.ikeaUrl = 'http://www.ikea.com'
+        self.productUrl = '/ru/ru/catalog/products/'
 
     def catchDataAtUrl(self, url):
     
         try:
-
             response = urllib2.urlopen(url)
             data = response.read()
             return data.strip()
-
         except:
-        
+            logging.error('Can\'t parse: ' + url)
             return ''
 
     
-    def processItemsAtURL(self, index):
+    def processItemsAtIndex(self, index):
 
         parser = productsAzLinkParser()
-
         data = self.catchDataAtUrl(self.allItemsAZUrl + '/' + str(index))
-        
         parser.feed(data)
+        
+        logging.info('Items at index ' + str(index) + ': ' + str(len(parser.urls)))
         
         for itemURL in parser.urls:
             if 'categories' in itemURL:
+                logging.debug('Category :' + itemURL + '\n')
                 self.processCategory(itemURL)
-            else :
+                logging.debug('End of category\n')
+            else:
                 self.processItemAtUrl(itemURL, 1)
-            if __debug__:
-                print '------'
 
     def processCategory(self, URL):
         
-        try:
-        
-            data = self.catchDataAtUrl(self.ikeaUrl + URL)
-            
-            if __debug__:
-                print 'CATEGORY!!!!! : ' + URL
-        
-            parser = categoryParser()
-            
-            parser.feed(data.decode('UTF-8'))
-        
-            for itemURL in parser.itemURLs:
-                
-                if __debug__:
-                    print '-------'
-                
-                self.processItemAtUrl(itemURL, 1)
-
-                if __debug__:
-                    print '-------'
-
-            if __debug__:
-                print 'END OF CATEGORY!!!!!!'
-                print '------------'
-
-        except:
-            
-            if __debug__:
-                print "Can't parse " + URL
+        data = self.catchDataAtUrl(self.ikeaUrl + URL)
+        parser = categoryParser()
+        parser.feed(data.decode('UTF-8'))
+    
+        for itemURL in parser.itemURLs:
+            self.processItemAtUrl(itemURL, 1)
 
     def processItemAtUrl(self, url, recursive):
-        
-        serial = url.replace('/', '')[-8:]
-        
-        if __debug__:
-            print 'Serial for checking in database ' + serial
-        
-        if self.database.doesNotContainItem(serial):
-        
-            parser = itemParser()
-            
-            if __debug__:
-                print 'Parsing ' + url
 
-            try:
-                data = self.catchDataAtUrl(self.ikeaUrl + url)
-                
-                parser.feed(data.decode('UTF-8'))
-                self.database.insertItem(parser.item)
-                
-                global qty
-                qty += 1
-                
-                if qty % 10 == 0:
-                    print qty
-                
-                if recursive == 1 and len(parser.otherItemsSerial):
-                    for x in parser.otherItemsSerial:
-                        self.processItemAtUrl(self.productUrl + str(x), 0)
-            except:
-    
-                if __debug__:
-                    print "Can't parse " + url
-    
-        else:
-            if __debug__:
-                print "COLLISION"
+        logging.debug('Parsing an item:' + url)
+
+        if os.fork() == 0:
+
+            logging.basicConfig(filename = 'parser.log', format = '%(levelname)s:%(message)s', level = logging.INFO)
+
+            parser = itemParser()
+            data = self.catchDataAtUrl(self.ikeaUrl + url)
+            
+            parser.feed(data.decode('UTF-8'))
+            self.database.insertItem(parser.item)
+            
+            global qty
+            qty += 1
+            
+            if qty % 100 == 0:
+                logging.info(str(qty) + '\n')
+            
+            if recursive == 1 and len(parser.otherItemsSerial):
+                for x in parser.otherItemsSerial:
+                    self.processItemAtUrl(self.productUrl + str(x), 0)
+
+            sys.exit(0)
 
 
 databaseName = 'data.sqlite3'
@@ -294,9 +246,9 @@ if __name__ == '__main__':
     signal.signal(signal.SIGINT, signal_handler)
     
     os.system('python init.py')
-
+    logging.basicConfig(format = '%(levelname)s:%(message)s', level = logging.INFO)
+    
     worker = WebWorker()
 
     for index in range(0, 30):
-        worker.processItemsAtURL(index)
-
+        worker.processItemsAtIndex(index)

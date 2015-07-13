@@ -64,7 +64,7 @@ class itemParser(HTMLParser):
     encoding = 'UTF-8'
     
     fetchMask = []
-    attrs = [['div', ('id', 'name')], ['div', ('class', 'proddebugRow')], ['div', ('id', 'type')], ['span', ('id', 'price1')], ['div', ('id', 'itemNumber')]]
+    attrs = [['div', ('id', 'name')], ['div', ('class', 'prodInfoRow')], ['div', ('id', 'type')], ['span', ('id', 'price1')], ['div', ('id', 'itemNumber')]]
     
     otherItemsFetching = 0
     otherItemsAttrs = ['select', [('class', 'dropdown'), ('id', 'dropAllAttributes'), ('name', 'partNumber'),  ('title', 'dropAllAttributes')]]

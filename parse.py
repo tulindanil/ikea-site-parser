@@ -211,19 +211,20 @@ class WebWorker():
 
         workers = []
     
-        for i in range(4):
-            p = Process(target = self.processItemAtUrl, args = (queue.get(), 1))
-            workers.append(p)
-            p.start()
-        
-        logging.info('Workers\' size is ' + str(len(workers)))
-    
+#        for i in range(4):
+#            p = Process(target = self.processItemAtUrl, args = (queue.get(), 1))
+#            workers.append(p)
+#            p.start()
+
+#        logging.info('Workers\' size is ' + str(len(workers)))
+
         while not queue.empty():
-            for p in workers:
-                if not p.is_alive() and not queue.empty():
-                    p.join()
-                    p = Process(target = self.processItemAtUrl, args = (queue.get(), 1))
-                    p.start()
+            self.processItemAtUrl(queue.get(), 1)
+#            for p in workers:
+#                if not p.is_alive() and not queue.empty():
+#                    p.join()
+#                    p = Process(target = self.processItemAtUrl, args = (queue.get(), 1))
+#                    p.start()
 
         for p in workers:
             p.join()

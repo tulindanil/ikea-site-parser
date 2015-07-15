@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 
 from __future__ import unicode_literals
-from multiprocessing import Process, Queue
+from multiprocessing import Process, Queue, Lock
 
+import time
 import urllib2, logging, sqlite3
 import os
 import sys
@@ -18,14 +19,13 @@ def signal_handler(signal, frame):
     sys.exit(1)
 
 class Item:
-    
-    fields = [('name', ''), ('title', ''), ('desc', ''), ('price', ''), ('serial', '')]
+
+    def __init__(self):
+        self.fields = [('name', ''), ('title', ''), ('desc', ''), ('price', ''), ('serial', '')]
 
     def printItem(self):
         for x in range (0, len(self.fields)):
             print self.fields[x][1]
-
-qty = 0
 
 class productsAzLinkParser(HTMLParser):
 
@@ -60,19 +60,19 @@ class categoryParser(HTMLParser):
 
 class itemParser(HTMLParser):
 
-    item = Item()
     encoding = 'UTF-8'
-    
-    fetchMask = []
-    attrs = [['div', ('id', 'name')], ['div', ('class', 'prodInfoRow')], ['div', ('id', 'type')], ['span', ('id', 'price1')], ['div', ('id', 'itemNumber')]]
-    
-    otherItemsFetching = 0
-    otherItemsAttrs = ['select', [('class', 'dropdown'), ('id', 'dropAllAttributes'), ('name', 'partNumber'),  ('title', 'dropAllAttributes')]]
-    otherItemsSerial = []
     
     def __init__(self):
         HTMLParser.__init__(self)
+
         self.fetchMask = []
+        self.item = Item()
+        
+        self.attrs = [['div', ('id', 'name')], ['div', ('class', 'prodInfoRow')], ['div', ('id', 'type')], ['span', ('id', 'price1')], ['div', ('id', 'itemNumber')]]
+    
+        self.otherItemsFetching = 0
+        self.otherItemsAttrs = ['select', [('class', 'dropdown'), ('id', 'dropAllAttributes'), ('name', 'partNumber'),  ('title', 'dropAllAttributes')]]
+        self.otherItemsSerial = []
         
         for x in range(0, len(self.item.fields)):
             self.fetchMask.append(0)
@@ -123,12 +123,10 @@ class Database():
 
     databaseName = 'data.sqlite3'
 
-    connection = None
-    cursor = None
-
     def __init__(self):
         
-        self.connection = sqlite3.connect(databaseName)
+        self.lock = Lock()
+        self.connection = sqlite3.connect(self.databaseName)
         self.cursor = self.connection.cursor()
 
     def insertItem(self, item):
@@ -144,6 +142,8 @@ class Database():
         sql += "', "
         sql += item.fields[3][1];
         sql += ");"
+        
+        self.lock.acquire()
         
         try:
         
@@ -162,6 +162,8 @@ class Database():
             
             logging.error('SQLITE COMMIT ISSUE')
 
+        self.lock.release()
+
     def doesNotContainItem(self, serial):
         
         self.cursor.execute('SELECT * FROM UNIT WHERE ID = ' + serial)
@@ -171,6 +173,7 @@ class Database():
 class WebWorker():
     
     def __init__(self):
+        
         self.database = Database()
         self.allItemsAZUrl = 'http://www.ikea.com/ru/ru/catalog/productsaz'
         self.ikeaUrl = 'http://www.ikea.com'
@@ -199,28 +202,32 @@ class WebWorker():
         
         for itemURL in parser.urls:
             if 'categories' in itemURL:
-                logging.debug('Category :' + itemURL + '\n')
+#                logging.debug('Category :' + itemURL + '\n')
                 self.processCategory(itemURL, queue)
-                logging.debug('End of category\n')
+#                logging.debug('End of category\n')
             else:
-                self.processItemAtUrl(itemURL, 1)
-#                queue.put(itemURL)
+#                self.processItemAtUrl(itemURL, 1)
+                queue.put(itemURL)
 
-#        workers = []
-#    
-#        for i in range(1):
-#            p = Process(target = self.processItemAtUrl, args = (queue.get(), 1))
-#            workers.append(p)
-#            p.start()
-#        
-#        logging.debug('Workers\' size is ' + str(len(workers)))
-#    
-#        while not queue.empty():
-#            for p in workers:
-#                if not p.is_alive():
-#                    p.join()
-#                    p = Process(target = self.processItemAtUrl, args = (queue.get(), 1))
-#                    p.start()
+        workers = []
+    
+        for i in range(4):
+            p = Process(target = self.processItemAtUrl, args = (queue.get(), 1))
+            workers.append(p)
+            p.start()
+        
+        logging.info('Workers\' size is ' + str(len(workers)))
+    
+        while not queue.empty():
+            for p in workers:
+                if not p.is_alive() and not queue.empty():
+                    p.join()
+                    p = Process(target = self.processItemAtUrl, args = (queue.get(), 1))
+                    p.start()
+
+        for p in workers:
+            p.join()
+            p.terminate()
 
     def processCategory(self, URL, queue):
         
@@ -229,14 +236,12 @@ class WebWorker():
         parser.feed(data.decode('UTF-8'))
     
         for itemURL in parser.itemURLs:
-#            queue.put(itemURL)
-            self.processItemAtUrl(itemURL, 1)
+            queue.put(itemURL)
+#            self.processItemAtUrl(itemURL, 1)
 
     def processItemAtUrl(self, url, recursive):
 
         logging.debug('Parsing an item:' + url)
-
-        logging.basicConfig(filename = 'parser.log', format = '%(levelname)s:%(message)s', level = logging.INFO)
 
         parser = itemParser()
         data = self.catchDataAtUrl(self.ikeaUrl + url)
@@ -254,16 +259,17 @@ class WebWorker():
             for x in parser.otherItemsSerial:
                 self.processItemAtUrl(self.productUrl + str(x), 0)
 
-databaseName = 'data.sqlite3'
+qty = 0
 
 if __name__ == '__main__':
 
     signal.signal(signal.SIGINT, signal_handler)
     
     os.system('python init.py')
-    logging.basicConfig(format = '%(levelname)s:%(message)s', level = logging.DEBUG)
-    
-    worker = WebWorker()
+    logging.basicConfig(format = '%(levelname)s:%(message)s', level = logging.INFO)
 
-    for index in range(0, 30):
+    for index in range(1):
+        start_time = time.time()
+        worker = WebWorker()
         worker.processItemsAtIndex(index)
+        print("--- %s seconds ---" % (time.time() - start_time))
